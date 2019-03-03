@@ -4,6 +4,11 @@ require 'json'
 require 'pry'
 require 'date'
 require 'minitest/autorun'
+require 'benchmark'
+require 'memory_profiler'
+require 'ruby-prof'
+
+RubyProf.measure_mode = RubyProf::ALLOCATIONS
 
 class User
   attr_reader :attributes, :sessions
@@ -43,6 +48,26 @@ def collect_stats_from_users(report, users_objects, &block)
   end
 end
 
+def print_memory_usage
+  "%d MB" % (`ps -o rss= -p #{Process.pid}`.to_i / 1024)
+end
+
+def test
+  puts 'START'
+  time = Benchmark.realtime do
+    # GC.disable
+    puts "rss before concatenation: #{print_memory_usage}"
+    report = MemoryProfiler.report do
+      work
+    end
+    report.pretty_print(scale_bytes: true)
+    # printer = RubyProf::GraphHtmlPrinter.new(result)
+    # printer.print(File.open("ruby_prof_graph_alloc.html", "w+"))
+    puts "rss after concatenation: #{print_memory_usage}"
+  end
+  puts "Finish in #{time.round(2)}"
+end
+
 def work
   file_lines = File.read('data.txt').split("\n")
 
@@ -52,7 +77,7 @@ def work
   file_lines.each do |line|
     cols = line.split(',')
     users = users + [parse_user(line)] if cols[0] == 'user'
-    sessions = sessions + [parse_session(line)] if cols[0] == 'session'
+    sessions << parse_session(line) if cols[0] == 'session'
   end
 
   # Отчёт в json
