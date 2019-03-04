@@ -8,7 +8,29 @@ require 'benchmark'
 require 'memory_profiler'
 require 'ruby-prof'
 
-RubyProf.measure_mode = RubyProf::ALLOCATIONS
+RubyProf.measure_mode = RubyProf::MEMORY
+
+def print_memory_usage
+  format('%d MB', (`ps -o rss= -p #{Process.pid}`.to_i / 1024))
+end
+
+def test
+  puts 'START'
+  time = Benchmark.realtime do
+    puts "rss before concatenation: #{print_memory_usage}"
+    report = RubyProf.profile do
+      # report = MemoryProfiler.report do
+      work
+    end
+    # report.pretty_print(scale_bytes: true)
+    printer = RubyProf::CallTreePrinter.new(report)
+    printer.print(path: '.', profile: 'profile')
+    # printer = RubyProf::GraphHtmlPrinter.new(result)
+    # printer.print(File.open("ruby_prof_graph_alloc.html", "w+"))
+    puts "rss after concatenation: #{print_memory_usage}"
+  end
+  puts "Finish in #{time.round(2)}"
+end
 
 class User
   attr_reader :attributes, :sessions
@@ -19,18 +41,8 @@ class User
   end
 end
 
-# def parse_user(user)
-#   fields = user.split(',')
-#   parsed_result = {
-#     'id' => fields[1],
-#     'first_name' => fields[2],
-#     'last_name' => fields[3],
-#     'age' => fields[4]
-#   }
-# end
-def parse_user(user)
-  fields = user.split(',')
-  parsed_result = {
+def parse_user(fields)
+  {
     'id' => fields[1],
     'first_name' => fields[2],
     'last_name' => fields[3],
@@ -38,17 +50,8 @@ def parse_user(user)
   }
 end
 
-def parse_session(session)
-  fields = session.split(',')
-  # parsed_result = {
-  #   'user_id' => fields[1],
-  #   'session_id' => fields[2],
-  #   'browser' => fields[3],
-  #   'time' => fields[4],
-  #   'date' => fields[5]
-  # }
-  parsed_result = {
-    # 'user_id' => fields[1],
+def parse_session(fields)
+  {
     'session_id' => fields[2],
     'browser' => fields[3],
     'time' => fields[4],
@@ -58,30 +61,10 @@ end
 
 def collect_stats_from_users(report, users_objects)
   users_objects.each do |user|
-    binding.pry
-    user_key = user.attributes['first_name'].to_s + ' ' + user.attributes['last_name'].to_s
+    user_key = "#{user.attributes['first_name']} #{user.attributes['last_name']}"
     report['usersStats'][user_key] ||= {}
     report['usersStats'][user_key] = report['usersStats'][user_key].merge(yield(user))
   end
-end
-
-def print_memory_usage
-  format('%d MB', (`ps -o rss= -p #{Process.pid}`.to_i / 1024))
-end
-
-def test
-  puts 'START'
-  time = Benchmark.realtime do
-    puts "rss before concatenation: #{print_memory_usage}"
-    report = MemoryProfiler.report do
-      work
-    end
-    report.pretty_print(scale_bytes: true)
-    # printer = RubyProf::GraphHtmlPrinter.new(result)
-    # printer.print(File.open("ruby_prof_graph_alloc.html", "w+"))
-    puts "rss after concatenation: #{print_memory_usage}"
-  end
-  puts "Finish in #{time.round(2)}"
 end
 
 def work
@@ -92,25 +75,16 @@ def work
 
   file_lines.each do |line|
     cols = line.split(',')
-    if cols[0] == 'user'
-      # id = cols[1]
-      # if users[id].nil?
-        users[cols[1]] = parse_user(line)
-      # else
-      #   users[id] << parse_user(line)
-      # end
-    end
-    binding.pry
-    if cols[0] == 'session'
-      id = cols[1]
-      if sessions[id].nil?
-        sessions[id] = [parse_session(line)]
-      else
-        sessions[id] << parse_session(line)
-      end
-    end
+
+    users[cols[1]] = parse_user(cols) if cols[0] == 'user'
+
+    next unless cols[0] == 'session'
+
+    id = cols[1]
+    sessions[id] ||= []
+    sessions[id] << parse_session(cols)
   end
-  binding.pry
+
   # Отчёт в json
   #   - Сколько всего юзеров +
   #   - Сколько всего уникальных браузеров +
@@ -128,36 +102,30 @@ def work
 
   report = {}
 
-  report[:totalUsers] = users.values.flatten.count
+  report[:totalUsers] = users.keys.count
 
+  all_browsers = sessions.values.flatten.map { |s| s['browser'] }
   # Подсчёт количества уникальных браузеров
-  uniqueBrowsers = []
-  sessions.values.flatten.each do |session|
-    browser = session['browser']
-    uniqueBrowsers += [browser] if uniqueBrowsers.all? { |b| b != browser }
-  end
+  unique_browsers = all_browsers.uniq
+  # sessions.values.flatten.each do |session|
+  #   uniqueBrowsers << session['browser']
+  # end
+  # uniqueBrowsers.uniq!
 
-  report['uniqueBrowsersCount'] = uniqueBrowsers.count
+  report['uniqueBrowsersCount'] = unique_browsers.count
 
   report['totalSessions'] = sessions.values.flatten.count
 
   report['allBrowsers'] =
-    sessions.values.flatten
-            .map { |s| s['browser'] }
-            .map(&:upcase)
-            .sort
-            .uniq
-            .join(',')
+    unique_browsers
+    .map(&:upcase)
+    .sort
+    .join(',')
 
   # Статистика по пользователям
   users_objects = []
 
   users.each do |user_id, attrs|
-    # attributes = user
-    binding.pry
-    # user_sessions = sessions.select { |session| session['user_id'] == user['id'] }
-    # user_sessions = sessions[user_id] || []
-    # user_object = User.new(attributes: attrs, sessions: sessions[user_id])
     users_objects << User.new(attributes: attrs, sessions: sessions[user_id])
   end
 
@@ -165,7 +133,6 @@ def work
 
   # Собираем количество сессий по пользователям
   collect_stats_from_users(report, users_objects) do |user|
-    binding.pry
     { 'sessionsCount' => user.sessions.count }
   end
 
