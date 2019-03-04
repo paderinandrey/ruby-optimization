@@ -33,11 +33,13 @@ def test
 end
 
 class User
-  attr_reader :attributes, :sessions
+  attr_reader :attributes, :sessions, :browsers
 
   def initialize(attributes:, sessions:)
+    binding.pry
     @attributes = attributes
     @sessions = sessions
+    @browsers = sessions.map { |s| s['browser'] }.map(&:upcase).sort
   end
 end
 
@@ -113,7 +115,6 @@ def work
   # uniqueBrowsers.uniq!
 
   report['uniqueBrowsersCount'] = unique_browsers.count
-
   report['totalSessions'] = sessions.values.flatten.count
 
   report['allBrowsers'] =
@@ -123,10 +124,8 @@ def work
     .join(',')
 
   # Статистика по пользователям
-  users_objects = []
-
-  users.each do |user_id, attrs|
-    users_objects << User.new(attributes: attrs, sessions: sessions[user_id])
+  users_objects = users.each.with_object([]) do |(user_id, attrs), arr|
+    arr << User.new(attributes: attrs, sessions: sessions[user_id])
   end
 
   report['usersStats'] = {}
@@ -148,17 +147,17 @@ def work
 
   # Браузеры пользователя через запятую
   collect_stats_from_users(report, users_objects) do |user|
-    { 'browsers' => user.sessions.map { |s| s['browser'] }.map(&:upcase).sort.join(', ') }
+    { 'browsers' => user.browsers.join(', ') }
   end
 
   # Хоть раз использовал IE?
   collect_stats_from_users(report, users_objects) do |user|
-    { 'usedIE' => user.sessions.map { |s| s['browser'] }.any? { |b| b.upcase =~ /INTERNET EXPLORER/ } }
+    { 'usedIE' => user.browsers.any? { |b| b =~ /INTERNET EXPLORER/ } }
   end
 
   # Всегда использовал только Chrome?
   collect_stats_from_users(report, users_objects) do |user|
-    { 'alwaysUsedChrome' => user.sessions.map { |s| s['browser'] }.all? { |b| b.upcase =~ /CHROME/ } }
+    { 'alwaysUsedChrome' => user.browsers.all? { |b| b =~ /CHROME/ } }
   end
 
   # Даты сессий через запятую в обратном порядке в формате iso8601
